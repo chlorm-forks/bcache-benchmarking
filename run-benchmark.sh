@@ -5,31 +5,30 @@ set -o errexit
 set -o errtrace
 set -o pipefail
 
+# Benchmarks:
 BENCHDIR=$(dirname "$(readlink -f "$0")")
+BENCHES=$(cd $BENCHDIR/benches; echo *)
 
+# Default options:
 FILESYSTEMS="bcache ext4 ext4-no-journal xfs btrfs"
-DEVS="/dev/rssda /dev/sdb /dev/sda5"
-BENCHES="					\
-    dio-randread				\
-    dio-randread-multithreaded			\
-    dio-randwrite				\
-    dio-randwrite-multithreaded			\
-    dio-randwrite-unwritten			\
-    dio-randwrite-multithreaded-unwritten	\
-    dio-randrw					\
-    dio-randrw-multithreaded			\
-    dio-append					\
-    dio-append-one-cpu				\
-    buffered-sync-append"
-OUT=""
+DEVS=""
 MNT=/mnt/run-benchmark
+OUT=$(dirname "$(readlink -f "$0")")
+
+usage()
+{
+    echo "run-benchmark.sh - run benchmarks"
+    echo "  -d devices to test"
+    echo "  -f filesystems to test"
+    echo "  -b benchmarks to run"
+    echo "  -m mountpoint to use (default /mnt/run-benchmark)"
+    echo "  -o benchmark output directory (default /root/results/<date>_\$i/"
+    echo "  -h display this help and exit"
+    exit 0
+}
 
 while getopts "hd:f:b:m:o:" arg; do
     case $arg in
-	h)
-	    usage
-	    exit 0
-	    ;;
 	d)
 	    DEVS=$OPTARG
 	    ;;
@@ -45,6 +44,10 @@ while getopts "hd:f:b:m:o:" arg; do
 	o)
 	    OUT=$OPTARG
 	    ;;
+	h)
+	    usage
+	    exit 0
+	    ;;
     esac
 done
 shift $(( OPTIND - 1 ))
@@ -54,48 +57,44 @@ if [[ -z $DEVS ]]; then
     exit 1
 fi
 
-if [[ -z $OUT ]]; then
-    for i in `seq -w 0 100`; do
-	OUT=/root/results/$(date -I)_$i
-	[[ ! -e $OUT ]] && break
-    done
-fi
 
-mkdir $OUT
-terse=$OUT/terse
-full=$OUT/full
+DB="$OUT/benchmark-results"
+LOGDIR="$OUT/benchmark-logs"
+mkdir -p "$OUT" "$LOGDIR" "$MNT"
 
-truncate --size 0 $terse
-truncate --size 0 $full
+# Database schema:
+# date		- date benchmark was run
+# version	- kernel version or git sha1
+# fs		- filesystem being tested
+# device	- SSD/HDD model
 
-echo "Test output in $OUT:"
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS results(date, version, fs, device, benchmark_name, benchmark_cmd, output, logfile);"
+
+function cleanup {
+    umount $MNT > /dev/null 2>&1 || true
+}
+trap cleanup SIGINT SIGHUP SIGTERM EXIT
+
+benchmark_date=$(date)
+kernel_version=$(uname -r)
 
 for dev in $DEVS; do
-    devname=$(basename $dev)
     model=$(hdparm -i $dev |tr ',' '\n'|sed -n 's/.*Model=\(.*\)/\1/p')
 
-    echo "Device $devname ($model):" |tee -a $terse
-
     for bench in $BENCHES; do
-	benchname=$(basename $bench)
-	echo "    $benchname:" |tee -a $terse
+	benchmark_cmd=$(cat "$BENCHDIR/benches/$bench")
 
 	for fs in $FILESYSTEMS; do
-	    out=$OUT/$devname-$benchname-$fs
-	    printf "        %-16s" $fs: |tee -a $terse
+	    echo "Running $bench on $fs, $dev ($model)"
 
-	    $BENCHDIR/prep-benchmark-fs.sh -d $dev -m $MNT -f $fs >/dev/null 2>&1
-	    sleep 30 # quiesce
-	    (cd $MNT; "$BENCHDIR/benches/$bench") > $out
+	    $BENCHDIR/prep-benchmark-fs.sh -d $dev -m $MNT -f $fs #>/dev/null 2>&1
+	    sleep 30 # quiesce - SSDs are annoying
+
+	    # run benchmark
+	    results=$(cd $MNT; $benchmark_cmd)
 	    umount $dev
 
-	    echo "**** Device $devname ($model) filesystem $fs benchmark $benchname:" >> $full
-	    cat $out >> $full
-	    echo >> $full
-
-	    sed -rne '/iops/ s/ +([[:alpha:]]+) ?:.*iops=([0-9]+).*/\1 \2/ p' $out|
-		awk '{printf("%8s %8d iops", $1, $2)} END {printf("\n")}'|
-		tee -a $terse
+	    sqlite3 "$DB" "INSERT INTO results values($benchmark_date, $kernel_version, $fs, $model, $bench, $benchmark_cmd, $results, \"\");"
 	done
     done
 done

@@ -11,4 +11,4 @@ fio --group_reporting					\
     --blocksize=4k					\
     --create_on_open=1					\
     --file_append=1					\
-    --cpus_allowed=4
+    --cpus_allowed=0

@@ -1,12 +1,11 @@
-#!/bin/bash
-
-fio --group_reporting					\
-    --runtime=60					\
-    --size=16G						\
-    --name=dio-randwrite				\
-    --ioengine=libaio					\
-    --direct=1						\
-    --iodepth=64					\
-    --rw=randwrite					\
-    --blocksize=4k					\
+fio --group_reporting
+    --runtime=60
+    --size=16G
+    --name=dio-randwrite
+    --ioengine=libaio
+    --direct=1
+    --iodepth=64
+    --rw=randwrite
+    --blocksize=4k
+    --cpus_allowed=0
     --overwrite=1

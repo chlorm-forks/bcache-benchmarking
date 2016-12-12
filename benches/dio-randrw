@@ -8,4 +8,5 @@ fio --group_reporting					\
     --direct=1						\
     --iodepth=60					\
     --rw=randrw						\
-    --blocksize=4k
+    --blocksize=4k					\
+    --cpus_allowed=0
